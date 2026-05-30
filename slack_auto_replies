@@ -1,0 +1,322 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": [
+          "message"
+        ],
+        "channelId": {
+          "__rl": true,
+          "value": "C0B17PF8KRA",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "a2669f4e-008c-4b62-8d89-ffbb1cc429ef",
+      "name": "Slack Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "2b80e20a-d6c2-43b5-840a-ae058ff0fe25",
+      "executeOnce": false,
+      "credentials": {
+        "slackApi": {
+          "id": "2j8XuM8laBFNFPNK",
+          "name": "Slack account 134"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $input.first().json;\n\nconst sectionEls =\n  first.blocks?.[0]?.elements?.[0]?.elements ?? [];\n\nconst combined = sectionEls\n  .filter(e => e?.type === 'text' && typeof e.text === 'string')\n  .map(e => e.text)\n  .join('');\n\nconst question = (combined || first.text || '')\n  .replace(/<@[^>]+>/g, '')\n  .trim();\n\nreturn [\n  {\n    json: {\n      question,\n      channelId: first.channel,\n      thread: first.thread_ts || first.ts,\n      userId: first.user, // <-- added only\n      confluenceBase: 'https://vistaprint.atlassian.net',\n      spaceKey: 'PR1',\n    },\n  },\n];"
+      },
+      "id": "edaca044-41bf-4adf-bee5-5f5c0306fa64",
+      "name": "Prepare Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepare Request').item.json.question }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=<role>\nYou are a Confluence Search + Answer agent.\nGoal: find the best Confluence pages in the provided Space, read them (read-only), then answer the user's question in Slack mrkdwn and include links.\n</role>\n\n<inputs>\nSpaceKey: \"{{ $('Prepare Request').item.json.spaceKey }}\"\nQuestion: \"{{ $('Prepare Request').item.json.question }}\"\nthreadId: \"{{ $('Prepare Request').item.json.thread }}\"\nchannel: \"{{ $('Prepare Request').item.json.channelId }}\"\n</inputs>\n\n<hard_rules>\n1) READ ONLY. Never propose edits, writes, or changes to Confluence.\n2) Only use the provided SpaceKey from <inputs>. Do not search any other space.\n3) You MUST output a valid, non-empty CQL string (Confluence Cloud CQL) using ONLY these fields/operators:\n   Fields: space, type, title, text, label\n   Operators: =, ~, AND, OR, parentheses, ORDER BY lastmodified DESC\n4) Your CQL MUST include: space = \"<SpaceKey>\" AND type = page\n5) If Question is non-empty after trimming, CQL must NOT be empty.\n6) Output MUST be Slack mrkdwn (not GitHub markdown). No HTML. No tables. No '---' separators. No '#' headings.\n7) Do not include any other metadata in the Slack message besides what the template requests.\n</hard_rules>\n\n<cql_generation_rules>\n- If Question is empty after trimming: set cql=\"\" and output a Slack message asking the user to include a question.\n- Otherwise:\n  a) Extract 2–5 keywords from Question (lowercase). Remove stopwords like: how, do, i, the, to, a, an, is, are, for, of, on, in, my, your, with.\n  b) Build CQL using AND between keyword tokens: text ~ \"<token>\"\n  c) Optionally include a short 2–3 word phrase if safe: (title ~ \"<phrase>\" OR text ~ \"<phrase>\")\n  d) Always end with: ORDER BY lastmodified DESC\n\nWorking examples:\nspace = \"PR1\" AND type = page AND text ~ \"google\" AND text ~ \"workspace\" ORDER BY lastmodified DESC\nspace = \"PR1\" AND type = page AND (title ~ \"google workspace\" OR text ~ \"google workspace\") ORDER BY lastmodified DESC\n</cql_generation_rules>\n\n<slack_format_rules>\nSlack mrkdwn only:\n- Bold uses single asterisks: *bold*  (DO NOT use **bold**)\n- Bullets use: \"• \" (avoid nesting)\n- Inline code uses backticks: `like this`\n- Code blocks must be standalone (NOT inside bullets) and use triple backticks on their own lines.\n- Links must be: <https://url|Label>\n- Use double newlines between sections.\n</slack_format_rules>\n\n<execution_plan>\nA) Generate CQL per rules.\nB) Search Confluence (top 5) using expand: space,version,metadata.labels,_links\nC) Read the top 1–2 most relevant pages (if tool allows) to answer accurately.\nD) Produce a concise Slack answer + steps + sources.\n</execution_plan>\n\n<output_contract>\nReturn TWO parts in this exact order.\n\nPART 1 (Slack message) — follow this exact structure:\n\n*✅ Answer*\n\n<Give a detailed description of 6-7 lines max. Strictly stick to the facts found in the pages>\n\n*🧭 Here's how to do it*\n\n*Step 1️⃣:*\n> ...\n\n*Step 2️⃣:\n> ...\n\n*Step 3️⃣:*\n> ...\n\n*🧩 Example*\n```text\n<short snippet/query/config relevant to the question>\n```\n\n*🔗 Sources*\n• <https://...|Page title>\n• <https://...|Page title>\n\n\n\n\nIf Question is empty: set cql=\"\" resultCount=0 and output urls: with no entries.\n</output_contract>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        640,
+        0
+      ],
+      "id": "e145856d-131e-4478-85cf-1795c3a3f55d",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 2500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "@OpenAI/gpt-5.4",
+          "mode": "list",
+          "cachedResultName": "@OpenAI/gpt-5.4"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        400
+      ],
+      "id": "4a680b99-3840-4046-9324-1b65c65dd1a0",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "wYbFK5y3E32pvSt4",
+          "name": "OpenAI account 43"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "search",
+        "returnAll": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Return_All', ``, 'boolean') }}",
+        "additionalFields": {
+          "cql": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Cql', ``, 'string') }}",
+          "cqlcontext": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Cqlcontext', ``, 'string') }}"
+        },
+        "requestOptions": {}
+      },
+      "type": "@conciso/n8n-nodes-confluence-cloud.confluenceCloudTool",
+      "typeVersion": 1,
+      "position": [
+        736,
+        400
+      ],
+      "id": "d032dfa8-4534-4ec4-a303-7af4e2b0024b",
+      "name": "Search content by CQL in Confluence Cloud",
+      "credentials": {
+        "confluenceCloudApi": {
+          "id": "x7YKWzLuqUnLyJHn",
+          "name": "Confluence Cloud account 42"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('AI Agent').item.json.output.slackDetails[0].channelId }}",
+          "mode": "id"
+        },
+        "text": "={{ $('AI Agent').item.json.output.aiResponse }}",
+        "otherOptions": {
+          "thread_ts": {
+            "replyValues": {
+              "thread_ts": "={{ $('AI Agent').item.json.output.slackDetails[0].threadId }}"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1152,
+        0
+      ],
+      "id": "2f85b1eb-968b-4376-906f-25b4b5577bd3",
+      "name": "Send a message",
+      "webhookId": "c838ec7b-f68b-460f-b845-4ad64bf2d038",
+      "credentials": {
+        "slackApi": {
+          "id": "2j8XuM8laBFNFPNK",
+          "name": "Slack account 134"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"aiResponse\": \"Hello world this is a reply!\",\n\t\"slackDetails\": [\n      {\n        \"initialQuestion\": \"Hello this is a user question?\",\n        \"channelId\": \"C0AGZH5743X\",\n        \"threadId\": \"1772127032.255099\"\n      }\n    ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        400
+      ],
+      "id": "0ace6677-33af-478b-aafb-684a87a72d68",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('Prepare Request').item.json.channelId }}",
+          "mode": "id"
+        },
+        "text": "=:loading_: Looking that up for you <@{{ $('Prepare Request').item.json.userId }}>, just a moment...",
+        "otherOptions": {
+          "thread_ts": {
+            "replyValues": {
+              "thread_ts": "={{ $('Prepare Request').item.json.thread }}",
+              "reply_broadcast": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        448,
+        0
+      ],
+      "id": "8ce3da96-d90e-4b42-a60d-e09d94db6182",
+      "name": "Preload Message",
+      "webhookId": "c838ec7b-f68b-460f-b845-4ad64bf2d038",
+      "credentials": {
+        "slackApi": {
+          "id": "2j8XuM8laBFNFPNK",
+          "name": "Slack account 134"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('Prepare Request').item.json.channelId }}",
+          "mode": "id"
+        },
+        "timestamp": "={{ $('Preload Message').item.json.message.ts }}"
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        960,
+        0
+      ],
+      "id": "883cd960-1dca-4b47-ba57-ce3e36a3f4e8",
+      "name": "Delete a message",
+      "webhookId": "a7c860e1-03f0-444a-9b86-10f01d939d51",
+      "credentials": {
+        "slackApi": {
+          "id": "2j8XuM8laBFNFPNK",
+          "name": "Slack account 134"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Slack Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request": {
+      "main": [
+        [
+          {
+            "node": "Preload Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Delete a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search content by CQL in Confluence Cloud": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preload Message": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete a message": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e2942b408a8514928cb7e3da4602c259175390079131ecbbe20b5c72781cc9cb"
+  }
+}
+
