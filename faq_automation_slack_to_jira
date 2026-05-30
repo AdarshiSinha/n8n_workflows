@@ -1,0 +1,275 @@
+{
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        0
+      ],
+      "id": "ea1ba407-7b0b-40ae-b457-57802e6695e3",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction extractText(msg) {\n  // Try Slack blocks first\n  const blockText = msg.blocks\n    ?.flatMap(block => block.elements || [])\n    ?.flatMap(el => el.elements || [])\n    ?.filter(e => e.type === 'text' && typeof e.text === 'string')\n    ?.map(e => e.text)\n    ?.join('');\n\n  const text = blockText || msg.text || '';\n\n  return text\n    .replace(/<@[^>]+>/g, '') // remove mentions\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// Extract all messages\nconst threadMessages = items.map(item => {\n  const msg = item.json;\n\n  return {\n    user: msg.user || 'unknown',\n    ts: msg.ts,\n    text: extractText(msg),\n  };\n}).filter(m => m.text);\n\n// First message = question\nconst question = threadMessages[0]?.text || '';\n\n// Combined thread text for AI summarization\nconst threadText = threadMessages\n  .map((m, i) => `Message ${i + 1}: ${m.text}`)\n  .join('\\n');\n\nconst first = items[0].json;\n\nreturn [\n  {\n    json: {\n      question,\n      threadMessages,\n      threadText,\n      channelId: first.channel,\n      thread: first.thread_ts || first.ts,\n      userId: first.user,\n      confluenceBase: 'https://vistaprint.atlassian.net',\n      spaceKey: 'PR1',\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -80
+      ],
+      "id": "e712c6de-8ec9-471f-aa5f-5a082ec42a58",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "resource": "channel",
+        "operation": "replies",
+        "channelId": {
+          "__rl": true,
+          "value": "CQ69NRV0W",
+          "mode": "id"
+        },
+        "ts": 1778626207.648989,
+        "filters": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        208,
+        0
+      ],
+      "id": "e2ed19c0-d898-4ef1-aafd-b6b62a26b732",
+      "name": "Get a thread of messages posted to a channel",
+      "webhookId": "fce92c32-0ad9-4e45-8571-27498484d805",
+      "credentials": {
+        "slackApi": {
+          "id": "2j8XuM8laBFNFPNK",
+          "name": "Slack account 134"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "reaction",
+        "channelId": {
+          "__rl": true,
+          "value": "C0B17PF8KRA",
+          "mode": "id"
+        },
+        "timestamp": "={{ $json.ts }}",
+        "name": ":acknowledged:"
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        400,
+        160
+      ],
+      "id": "2a923022-2d1f-435b-825a-0793cc96def4",
+      "name": "Add a reaction",
+      "webhookId": "d4de6ff4-f156-4e5a-ac45-179ae6720f8f",
+      "credentials": {
+        "slackApi": {
+          "id": "HR7umbvVI9EFdn5M",
+          "name": "Slack account 198"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "16859",
+          "mode": "id"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10006",
+          "mode": "list",
+          "cachedResultName": "Task"
+        },
+        "summary": "={{ $json.output.question }}",
+        "additionalFields": {
+          "description": "={{ $json.output.summary }}",
+          "componentIds": [
+            "16804"
+          ],
+          "parentIssueKey": "CTAPP-2784",
+          "reporter": {
+            "__rl": true,
+            "value": "712020:0d644c84-6d8c-40db-ab41-49f741bc7da8",
+            "mode": "id"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        992,
+        -80
+      ],
+      "id": "1bab55e5-68a8-4a7e-808c-feb02ceacda7",
+      "name": "Create an issue",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "bPtkhmxz9L8GO27n",
+          "name": "Jira SW precs bot test"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.threadText }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=<role>\nYou are a Summary agent.\nGoal: Summarize Slack discussion threads into concise and accurate knowledge-base style summaries.\nYou must:\n\n1. Summarize the first message of the Slack thread as the question.\n2. Summarize all subsequent messages into a concise summary.\n3. Ignore greetings, acknowledgements, emojis, and irrelevant chatter.\n</role>\n\n<inputs>\nQuestion: \"{{ $('Code in JavaScript').item.json.question }}\"\nthreadId: \"{{ $('Code in JavaScript').item.json.thread }}\"\nAnswer: \"{{ $('Code in JavaScript').item.json.threadText }}\"\n</inputs>\n\n<hard_rules>\n1. Do not hallucinate information not present in the thread.\n2. Ignore Slack mentions, reactions, emojis, and formatting syntax.\n3. Keep the summary concise but technically complete.\n4. Preserve important technical terminology exactly as written.\n5. Return ONLY valid JSON.\n6. Do not output markdown.\n7. Do not explain your reasoning.\n8. The \"question\" field must contain only the first message of the thread.\n9. The \"summary\" field must summarize only the remaining thread messages.\n10. Keep the \"question\" within 255 character limit\n</hard_rules>\n\n<execution_plan>\nRead the original question.\nParse the entire Slack thread.\nDetect the main topic and intent.\nIdentify proposed solutions and clarifications.\nDetermine whether a final resolution exists.\nGenerate a concise summary.\nStructure the output according to the output contract.\n</execution_plan>\n\n<output_contract>\n{\n\"type\": \"object\",\n\"properties\": {\n\"question\": {\n\"type\": \"string\"\n},\n\"summary\": {\n\"type\": \"string\"\n}\n},\n\"required\": [\n\"question\",\n\"summary\"\n]\n}\n</output_contract>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        624,
+        -80
+      ],
+      "id": "eb323deb-e83c-497b-b7f0-000cbbfc35bb",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "@Anthropic/eu.anthropic.claude-opus-4-5-20251101-v1:0",
+          "mode": "list",
+          "cachedResultName": "@Anthropic/eu.anthropic.claude-opus-4-5-20251101-v1:0"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        624,
+        128
+      ],
+      "id": "4a9cc0d3-f64b-47f5-97f6-5f2772df4d4e",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "wYbFK5y3E32pvSt4",
+          "name": "OpenAI account 43"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"question\": \"Can you explain more on category level recommendations?\",\n\t\"summary\": \"Category level carousels on the Vistaprint website are high-visibility navigation tools to help customers explore relevant categories. Currently, they are manually curated and redudant with the main navigation header at the top of the webpage. The opportunity to differentiate category offerings could improve customer engagement and exploration.\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        768,
+        128
+      ],
+      "id": "0d88122b-b3d6-4fb5-b873-a98e76515a88",
+      "name": "Structured Output Parser"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get a thread of messages posted to a channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread of messages posted to a channel": {
+      "main": [
+        [
+          {
+            "node": "Add a reaction",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add a reaction": {
+      "main": [
+        []
+      ]
+    },
+    "Create an issue": {
+      "main": [
+        []
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Create an issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e2942b408a8514928cb7e3da4602c259175390079131ecbbe20b5c72781cc9cb"
+  }
+}
+
